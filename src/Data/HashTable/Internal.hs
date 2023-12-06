@@ -1,19 +1,40 @@
-----------------------------------------------------------------------
--- |
--- Module      :  Data.HashTable.Internal
--- Copyright   :  (c) Peter Robinson
--- License     :  BSD3 (see the file LICENSE)
---
--- Maintainer  :  Peter Robinson <pwr@lowerbound.io>
--- Stability   :  provisional
--- Portability :  non-portable (requires concurrency, stm)
---
--- You can find benchmarks and more information about the internals of this package here:  <https://lowerbound.io/blog/2019-10-24_concurrent_hash_table_performance.html>
---
-----------------------------------------------------------------------
-{-# LANGUAGE MultiParamTypeClasses, ScopedTypeVariables #-}
-module Data.HashTable.Internal
-where
+{- |
+You can find benchmarks and more information about the internals of this package here:  <https://lowerbound.io/blog/2019-10-24_concurrent_hash_table_performance.html>
+-}
+
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StrictData #-}
+
+module Data.HashTable.Internal (
+    MigrationStatus(..),
+    HashTable(..),
+    Chain(..),
+    Config(..),
+    newChainIO,
+    mkDefaultConfig,
+    new,
+    newWithDefaults,
+    readSizeIO,
+    readSize,
+    resize,
+    lookup,
+    genericModify,
+    insert,
+    add,
+    update,
+    modify,
+    swapValues,
+    delete,
+    atomicallyChangeLoad,
+    readLoad,
+    readAssocs,
+    readAssocsIO,
+    deleteFirstKey,
+    readChainForKeyIO,
+    readChainForIndexIO,
+    readChainForIndex,
+) where
 
 import Control.Concurrent.STM
 import Control.Concurrent
@@ -25,21 +46,27 @@ import Control.Monad
 import Data.Hashable
 import System.Random
 import Data.Maybe
-import qualified Data.List as L
+import Data.List qualified as L
 import Data.Vector(Vector,(!))
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import Prelude hiding (lookup,readList)
 
 -- Used internally.
 data MigrationStatus = NotStarted | Ongoing | Finished
-        deriving(Show,Eq)
+
+deriving stock instance Eq MigrationStatus
+
+deriving stock instance Show MigrationStatus
 
 -- | Used for chain-hashing.
 data Chain k v = Chain
-    { _itemsTV           :: TVar [(k,v)]   -- ^ stores the items for this index
+    { _itemsTV           :: {-# UNPACK #-} TVar [(k,v)]   -- ^ stores the items for this index
     , _migrationStatusTV :: TVar MigrationStatus -- ^ used internally for resizing
     }
-    deriving (Eq)
+
+deriving stock instance Eq (Chain k v)
+
+type role Chain representational representational
 
 -- | Create a new empty chain.
 newChainIO :: IO (Chain k v)
@@ -54,6 +81,8 @@ data HashTable k v = HashTable
     , _config           :: Config k  -- ^ the configuration options
     }
 
+type role HashTable representational representational
+
 -- | Configuration options that may affect the performance of the hash table
 data Config k = Config
     { _scaleFactor      :: Float -- ^ scale factor for resizing
@@ -62,10 +91,12 @@ data Config k = Config
     , _hashFunc         :: k -> Int
     }
 
+type role Config representational
+
 instance Show (Config k) where
-    show cfg = "Config " ++ show (_scaleFactor cfg)
-                         ++ show (_threshold cfg)
-                         ++ show (_numResizeWorkers cfg)
+    show cfg = "Config " <> show (_scaleFactor cfg)
+                         <> show (_threshold cfg)
+                         <> show (_numResizeWorkers cfg)
 
 -- | Default configuration: scale factor = 2.0; resizing threshold = 0.75;
 --   number of worker threads for resizing = 'getNumCapabilities';
@@ -84,7 +115,7 @@ mkDefaultConfig = do
 
 -- | Creates a new hash table with an initial size. See 'newWithDefaults' for more
 -- details.
-new :: (Eq k) => Int  -- ^ Initial size of the hash table
+new :: Int  -- ^ Initial size of the hash table
               -> Config k -> IO (HashTable k v)
 new size config = do
     chainsVec <- V.replicateM size newChainIO
@@ -97,7 +128,7 @@ new size config = do
 -- as we have cores available. This  will use a hash function with a (single)
 -- random salt. For security sensitive applications, you MUST supply your own hash
 -- function. (To be replaced by universal hashing in future versions.)
-newWithDefaults :: (Eq k,Hashable k) => Int -- ^ Initial size of the hash table
+newWithDefaults :: Hashable k => Int -- ^ Initial size of the hash table
                 -> IO (HashTable k v)
 newWithDefaults size = mkDefaultConfig >>= new size
 
@@ -115,8 +146,7 @@ readSize ht = do
 
 -- | Increases the size of the hash table by scaling the current size it according
 -- to the _scaleFactor in the configuration.
-resize :: (Eq k)
-       => HashTable k v -> IO ()
+resize :: forall k v. HashTable k v -> IO ()
 resize ht = do
     chainsVec <- readTVarIO $ _chainsVecTV ht
     let size1 = V.length chainsVec
@@ -138,11 +168,11 @@ resize ht = do
         let sliceLength = oldSize `div` numSlices
         let restLength = oldSize - ((numSlices-1)*sliceLength)
         let vecSlices = [ V.unsafeSlice
-                            (i*sliceLength)
-                            (if i==numSlices-1 then restLength
-                                               else sliceLength)
+                            (i * sliceLength)
+                            (if i == numSlices - 1 then restLength
+                                                   else sliceLength)
                             chainsVec
-                           | i <- [0..numSlices-1]]
+                           | i <- [ 0 .. numSlices - 1 ]]
         let (scale :: Float) = _scaleFactor (_config ht)
         let (newSize::Int) = round $ (fromIntegral oldSize) * scale
         newVec <- V.replicateM newSize newChainIO
@@ -160,6 +190,7 @@ resize ht = do
                         atomically $ writeTVar (_migrationStatusTV chain) Finished)
         debug "woke up blocked threads..."
     where
+        migrate :: forall v1. Vector (Chain k v1) -> Int -> Chain k v1 -> IO ()
         migrate newVec newSize chain = do
             atomically $ writeTVar (_migrationStatusTV chain) Ongoing
             listOfNodes <- readTVarIO (_itemsTV chain)
@@ -328,13 +359,12 @@ delete htable k = do
 -- | Atomically increment/decrement the table load value by adding the provided
 -- integer offest to the current value. Forks a thread that executes 'resize' if
 -- the load passes the configured threshold.
-atomicallyChangeLoad :: (Eq k)
-                     => HashTable k v
+atomicallyChangeLoad :: HashTable k v
                      -> Int -- ^ increment/decrement offset; can be negative
                      -> IO ()
 atomicallyChangeLoad htable incr = do
     totalLoad <- atomicModifyIORefCAS (_totalLoad htable) $
-                    \l -> (l+incr,l+incr)
+                    \l -> (l + incr, l + incr)
     size <- readSizeIO htable
     when ((fromIntegral totalLoad / fromIntegral size)
                         >= _threshold (_config htable)) $ do
@@ -351,8 +381,7 @@ readLoad htable = readIORef (_totalLoad htable)
 
 -- | Returns an atomic snapshot of the hash table as a list of key-value pairs. If
 -- there is a lot of contention going on, this may be very inefficient.
-readAssocs :: (Eq k)
-            => HashTable k v -> STM [(k,v)]
+readAssocs :: HashTable k v -> STM [(k,v)]
 readAssocs htable = do
     chainsVec <- readTVar $ _chainsVecTV htable
     let len = V.length chainsVec
@@ -362,8 +391,7 @@ readAssocs htable = do
     msum <$> mapM getItemsForChain [0..len-1]
 
 -- | Returns the content of the hash table as a list of key-value pairs. This is *not* an atomic operation! If you need atomicity, use 'readAssoc' instead.
-readAssocsIO :: (Eq k)
-            => HashTable k v -> IO [(k,v)]
+readAssocsIO :: HashTable k v -> IO [(k,v)]
 readAssocsIO htable = do
     chainsVec <- readTVarIO $ _chainsVecTV htable
     let len = V.length chainsVec
@@ -405,8 +433,12 @@ readChainForIndex htable idx = do
     return $ chainsVec ! idx
 
 {-# INLINABLE debug #-}
+debug :: a -> IO ()
+debug = const $ pure ()
+{-
 debug :: Show a => a -> IO ()
-debug _ = return () {- do
-    -- tid <- myThreadId
-    -- print a
-    -- appendFile ("thread" ++ show tid) (show a) -}
+debug a = do
+    tid <- myThreadId
+    print a
+    appendFile ("thread" <> show tid) (show a)
+-}

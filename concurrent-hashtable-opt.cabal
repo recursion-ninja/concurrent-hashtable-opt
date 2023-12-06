@@ -1,0 +1,182 @@
+cabal-version: 3.8
+name:           concurrent-hashtable-opt
+version:        0.1.9
+synopsis:       Thread-safe hash tables for multi-cores!
+description:    Please see the README on GitHub at <https://github.com/recursion-ninja/concurrent-hashtable-opt#readme>. Benchmarks can be found at <https://lowerbound.io/blog/2019-10-24_concurrent_hash_table_performance.html>
+category:       Concurrency
+homepage:       https://github.com/recursion-ninja/concurrent-hashtable-opt#readme
+bug-reports:    https://github.com/recursion-ninja/concurrent-hashtable-opt/issues
+author:         Peter Robinson
+maintainer:     pwr@lowerbound.io
+copyright:      2019 Peter Robinson
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    ChangeLog.md
+
+source-repository head
+  type: git
+  location: https://github.com/recursion-ninja/concurrent-hashtable-opt
+
+Flag Forego-Sanity
+  Description: Compile with full optimizations
+  Default:     False
+  Manual:      True
+
+Flag Optimize
+  Description: Compile with full optimizations
+  Default:     False
+  Manual:      True
+
+Common ghc-flags
+
+  Ghc-Options:
+    -fdiagnostics-color=always
+    -fhide-source-paths
+    -j
+
+  Ghc-Prof-Options:
+    -fprof-auto
+    -fprof-cafs
+
+  If !os(darwin)
+    CC-Options:
+      -rdynamic
+
+  If !flag(Optimize)
+    Ghc-Options:
+      -O0
+  Else
+    Ghc-Options:
+      -O2
+      -rtsopts
+      -threaded
+
+      -- Optimization flags
+      -fexcess-precision
+      -fexpose-all-unfoldings
+      -flate-specialise
+      -fmax-simplifier-iterations=16
+      -foptimal-applicative-do
+      -fspec-constr-count=8
+      -fspec-constr-keen
+      -fspecialize-aggressively
+      -fstatic-argument-transformation
+
+  If !flag(Forego-Sanity)
+    Ghc-Options:
+      -- Sanity check warnings
+      --   1. Include all warnings by default
+      -Weverything
+      --   2. Exclude the undesirable warnings
+      -Wno-all-missed-specialisations
+      -Wno-implicit-prelude
+      -Wno-inferred-safe-imports
+      -Wno-missing-import-lists
+      -Wno-missing-safe-haskell-mode
+      -Wno-monomorphism-restriction
+      -Wno-redundant-bang-patterns
+      -Wno-type-defaults
+      -Wno-unsafe
+
+  If !flag(Forego-Sanity) && impl(ghc >=9.2)
+    Ghc-Options:
+      -Wno-missing-kind-signatures
+
+  If !flag(Forego-Sanity) && impl(ghc >=9.4)
+    Ghc-Options:
+      -Wno-redundant-strictness-flags
+
+
+Common language-specs
+
+  Default-Extensions:
+    DerivingStrategies
+    ImportQualifiedPost
+    LambdaCase
+    NoGeneralizedNewtypeDeriving
+    RoleAnnotations
+    UnicodeSyntax
+
+  Default-Language:
+    GHC2021
+
+  
+library
+
+  Import:
+    ghc-flags,
+    language-specs
+
+  exposed-modules:
+      Data.HashTable
+      Data.HashTable.Internal
+  other-modules:
+      Paths_concurrent_hashtable_opt
+  hs-source-dirs:
+      src
+  build-depends:
+      async >=2.2.2 && <3
+    , atomic-primops >=0.8.3 && <2
+    , base >=4.7 && <5
+    , hashable >=1.2.7.0 && <2
+    , random >=1.1 && <2
+    , stm >=2.4.5.1 && <3
+    , vector >=0.12.0.3 && <1
+
+test-suite concurrent-hashtable-opt-test
+
+  Import:
+    ghc-flags,
+    language-specs
+
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_concurrent_hashtable_opt
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      QuickCheck >=2.13.2 && <3
+    , async >=2.2.2 && <3
+    , atomic-primops >=0.8.3 && <2
+    , base >=4.7 && <5
+    , concurrent-hashtable-opt
+    , containers >=0.6.0.1 && <1
+    , dictionary-type
+    , hashable >=1.2.7.0 && <2
+    , random >=1.1 && <2
+    , stm >=2.4.5.1 && <3
+    , vector >=0.12.0.3 && <1
+
+benchmark mainbench
+
+  Import:
+    ghc-flags,
+    language-specs
+
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_concurrent_hashtable_opt
+  hs-source-dirs:
+      benchmark
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N -O2
+  build-depends:
+      async >=2.2.2 && <3
+    , atomic-primops >=0.8.3 && <2
+    , base >=4.7 && <5
+    , concurrent-hashtable-opt
+    , containers >=0.6.0.1 && <1
+    , criterion >=1.5.6.0 && <2
+    , ctrie
+    , dictionary-type
+    , hashable >=1.2.7.0 && <2
+    , random >=1.1 && <2
+    , stm >=2.4.5.1 && <3
+    , stm-containers
+    , unordered-containers >=0.2.10.0 && <1
+    , vector >=0.12.0.3 && <1
