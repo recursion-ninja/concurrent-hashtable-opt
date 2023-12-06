@@ -111,7 +111,7 @@ library
     language-specs
 
   exposed-modules:
-      Data.HashTable
+      PHANE.Memoized
       Data.HashTable.Internal
   other-modules:
       Paths_concurrent_hashtable_opt

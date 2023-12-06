@@ -1,16 +1,4 @@
-----------------------------------------------------------------------
-
-----------------------------------------------------------------------
-
 {- |
-Module      :  Data.HashTable
-Copyright   :  (c) Peter Robinson
-License     :  BSD3 (see the file LICENSE)
-
-Maintainer  :  Peter Robinson <pwr@lowerbound.io>
-Stability   :  provisional
-Portability :  non-portable (requires concurrency, stm)
-
 You can find benchmarks and more information about the internals of this package here:  <https://lowerbound.io/blog/2019-10-24_concurrent_hash_table_performance.html>
 
 
@@ -27,7 +15,7 @@ Usage Example:
 >> atomically $ readAssocs ht  -- convert to a key-value list
 > [(1,"hello"),(3,"!"),(2,"world")]
 -}
-module Data.HashTable (
+module PHANE.Memoized (
     -- * Data Type
     HashTable,
     Chain,
