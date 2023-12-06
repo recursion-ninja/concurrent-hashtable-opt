@@ -43,6 +43,7 @@ import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
 import Data.Atomics
+import Data.Functor (($>))
 import Data.Hashable
 import Data.IORef
 import Data.List qualified as L
@@ -316,18 +317,18 @@ query htable key f = do
     case L.lookup key list of
         Just val -> pure val
         Nothing ->
-            let updater = do
-                    let val = force $ f key
-                    result ← atomically $ do
+            let val = force $ f key
+                updater = do
+                    written ← atomically $ do
                           migrationStatus ← readTVar (_migrationStatusTV chain)
                           case migrationStatus of
                               Ongoing → retry -- block until resizing is done
-                              Finished → return Nothing -- resizing already done; try again
+                              Finished → pure False  -- resizing already done; try again
                               NotStarted → do -- no resizing happening at the moment
-                                  Just <$> writeTVar (_itemsTV chain) ((key, val) : list)
-                    maybe updater (const $ pure val) result
+                                  True <$ writeTVar (_itemsTV chain) ((key, val) : list) 
+                    when (not written) updater
 
-            in  updater <* atomicallyChangeLoad htable 1
+            in  updater *> atomicallyChangeLoad htable 1 $> val
 
 
 {- | Inserts a key-value pair `k`,`v` into the hash table. Uses chain hashing to
