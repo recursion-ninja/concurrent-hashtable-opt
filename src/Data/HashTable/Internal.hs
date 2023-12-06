@@ -33,8 +33,10 @@ module Data.HashTable.Internal (
     readChainForKeyIO,
     readChainForIndexIO,
     readChainForIndex,
+    query,
 ) where
 
+import Control.DeepSeq
 import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Concurrent.STM
@@ -65,7 +67,7 @@ deriving stock instance Show MigrationStatus
 data Chain k v = Chain
     { _itemsTV ∷ {-# UNPACK #-} TVar [(k, v)]
     -- ^ stores the items for this index
-    , _migrationStatusTV ∷ TVar MigrationStatus
+    , _migrationStatusTV ∷ {-# UNPACK #-} TVar MigrationStatus
     -- ^ used internally for resizing
     }
 
@@ -86,11 +88,11 @@ newChainIO =
 
 -- | A thread-safe hash table that supports dynamic resizing.
 data HashTable k v = HashTable
-    { _chainsVecTV ∷ TVar (Vector (Chain k v))
+    { _chainsVecTV ∷ {-# UNPACK #-} TVar (Vector (Chain k v))
     -- ^ vector of linked lists
-    , _totalLoad ∷ IORef Int
+    , _totalLoad ∷ {-# UNPACK #-} IORef Int
     -- ^ the current load of the hash table
-    , _config ∷ Config k
+    , _config ∷ {-# UNPACK #-} Config k
     -- ^ the configuration options
     }
 
@@ -100,11 +102,11 @@ type role HashTable representational representational
 
 -- | Configuration options that may affect the performance of the hash table
 data Config k = Config
-    { _scaleFactor ∷ Float
+    { _scaleFactor ∷ {-# UNPACK #-} Float
     -- ^ scale factor for resizing
-    , _threshold ∷ Float
+    , _threshold ∷ {-# UNPACK #-} Float
     -- ^ load threshold for initiating resizing.
-    , _numResizeWorkers ∷ Int
+    , _numResizeWorkers ∷ {-# UNPACK #-} Int
     -- ^ maximum number of worker threads used during resizing
     , _hashFunc ∷ k → Int
     }
@@ -298,6 +300,34 @@ genericModify htable k stmAction = do
     case result of
         Nothing → genericModify htable k stmAction
         Just v → return v
+
+
+query 
+    ∷ (Eq k, NFData v)
+    ⇒ HashTable k v
+    → k
+    -- ^ key `k`
+    → (k -> v)
+    -- ^ value `v`
+    → IO v
+query htable key f = do
+    chain ← readChainForKeyIO htable key
+    list ← readTVarIO (_itemsTV chain)
+    case L.lookup key list of
+        Just val -> pure val
+        Nothing ->
+            let updater = do
+                    let val = force $ f key
+                    result ← atomically $ do
+                          migrationStatus ← readTVar (_migrationStatusTV chain)
+                          case migrationStatus of
+                              Ongoing → retry -- block until resizing is done
+                              Finished → return Nothing -- resizing already done; try again
+                              NotStarted → do -- no resizing happening at the moment
+                                  Just <$> writeTVar (_itemsTV chain) ((key, val) : list)
+                    maybe updater (const $ pure val) result
+
+            in  updater <* atomicallyChangeLoad htable 1
 
 
 {- | Inserts a key-value pair `k`,`v` into the hash table. Uses chain hashing to

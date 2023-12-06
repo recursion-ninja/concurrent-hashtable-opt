@@ -38,6 +38,9 @@ module Data.HashTable (
     mkDefaultConfig,
     Config (..),
 
+    -- * Atomic Read/Write-Operations
+    query,
+    
     -- * Atomic Read-Operations
     lookup,
     readAssocs,
